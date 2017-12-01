@@ -10,16 +10,16 @@ import (
 var Config struct {
 	InputFile string
 	OutputFile string
-	NumGoRoutines int
+	MaxLinks int
+	MaxImgProcs int
 }
 
 func init() {
 	flag.StringVar(&Config.InputFile, "i", "", "input csv")
 	flag.StringVar(&Config.OutputFile, "o", "", "output csv")
-	flag.IntVar(&Config.NumGoRoutines, "c", 4, "number of concurrent goroutines for image loading/processing (default 4)")
+	flag.IntVar(&Config.MaxImgProcs, "c", 1000, "number of images to be processed concurrently (default 1000)")
+	flag.IntVar(&Config.MaxLinks, "maxlinks", 400, "Number of links to read from the input stream at a time")
 }
-
-//https://1.bp.blogspot.com/-h9n7ExEQBBc/WdgemuGqb1I/AAAAAAAAlGk/kasPu4PNzMcbLdQMNpjvuA3k_TZDy33jwCLcBGAs/s1600/DSC_2126-20171005_1438%2B-%2BNearing%2BPeak%2BColor%2BIn%2BParts%2Bof%2BHigh%2BKnob%2BMassif%2B-%2BWayne%2BBrowning%2BPhotograph%2BPNG.png
 
 func main() {
 	// command line parsing
@@ -31,37 +31,95 @@ func main() {
 	}
 
 	// get the list of links, either from provided CSV or command line args
+	links := initLinks()
+	defer links.Close()
+
+	// continuously read links from the source
+	// we buffer linksChan to limit the amount of memory loaded from the file at once
+	linksChan := make(chan string, Config.MaxLinks)
+	go processLinks(links, linksChan)
+
+	// continuously check the linksChan for new links, then process the images
+	resChan := make(chan string)
+	go processImages(linksChan, resChan)
+	
+	// results of the image processor come back on reschan for display in the main process	
+	for res := range resChan {
+		fmt.Println(res)
+	}		
+}
+
+// initLinks initializes the links data source from CSV or CLI 
+func initLinks() Links {
 	var links Links
+
 	if len(Config.InputFile) > 0 {
-		file, err := os.Open(Config.InputFile + ".csv")
+		file, err := os.Open(Config.InputFile + ".csv") // HACK for now because flag ignores everything after the .
 		if err != nil {
 			log.Fatalf("Problem reading input CSV: %s", err.Error())
 			os.Exit(-1)
 		}
-		defer file.Close()
 
 		links = NewCsvLinks(file)
 	} else {
 		links = NewArrayLinks(flag.Args())
 	}
+
+	return links
+}
+
+// processLinks streams the image links from the data source to a channel
+func processLinks(links Links, out chan<- string) {
+	for {
+		link, err := links.GetNextLink()
+
+		// stop processing on error or EOF
+		if len(link) != 0 && err == nil {
+			out <- link
+		} else {
+		 	close(out)
+		 	return
+		}	
+	}
+}
+
+// processImages receives links from the channel and then loads the images in individual goroutines,
+// it will return the results of each calculation on resChan and close the channel when all image processes complete
+// and the links data source has been exhausted
+func processImages(linksChan <-chan string, resChan chan<- string) {
+	numProcess := 0
+	procChan := make(chan string)
+	for link := range linksChan {			
+		go handleImageProcess(NewTopColorsProcessor(3), link, procChan)			
+		numProcess++
+	}
+
+	// need to coordinate with processImage's child goroutines so we know when to close
+	for p := range procChan {
+		resChan <- p
+
+		numProcess--
+		if numProcess <= 0 {
+			close(procChan)
+			break
+		}
+	}
+	close(resChan)
+}
+
+// handleImageProcess loads and processes an individual image using the provided ImageProcessor
+// and outputs the results to a channel
+// TODO could abstract image loading into its own concurrent operation
+func handleImageProcess(p ImageProcessor, imgLink string, out chan<- string) {
+	l := CreateLoader(imgLink)
 	
-	// loop through the links, wait for memory to become available
-	// then spin up a new goroutine to handle the image
-	var err error
-	for nextLink, err := links.GetNextLink(); len(nextLink) > 0 && err == nil; nextLink, err = links.GetNextLink() {
-		l := CreateLoader(nextLink)
-
-		p := NewTopColorsProcessor(3)
-
-		img := DecodeImage(l.GetReader())
-
-		out := p.ProcessImage(img)
-
-		fmt.Printf("%s:%s\n", nextLink, out)	
-	}
-
+	img, err := l.Load()
 	if err != nil {
-		log.Fatal(err)
-		os.Exit(-1)
+		out <- err.Error()
+		return
 	}
+
+	res := p.ProcessImage(img)
+
+	out <- fmt.Sprintf("%s:%s", imgLink, res)	
 }

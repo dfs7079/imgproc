@@ -1,13 +1,8 @@
 package main
 
 import (
-	//"bytes"
-	//"encoding/base64"
 	"fmt"
 	"image"
-	"io"
-	"log"
-	//"os"
 	_ "image/gif"
 	_ "image/png"
 	_ "image/jpeg"
@@ -33,6 +28,7 @@ func NewTopColorsProcessor(numColors int) *TopColorsProcessor {
 	}
 }
 
+// insertColor is used to update the list of top colors. It trims the length of the array to numColors 
 func (t *TopColorsProcessor) insertColor(c uint32, index int) {
 	if len(t.outColors) != t.numColors {
 		t.outColors = make([]uint32, t.numColors)
@@ -51,8 +47,8 @@ func (t *TopColorsProcessor) ProcessImage(img image.Image) []byte {
 	// get image boundaries
 	b := img.Bounds()
 
-	// combines each color from the Image into a single uint32, using this as a hash key
-	// for keeping count of the maximum color
+	// combines each color from the Image into a single uint32, using this as
+	// a hash key for keeping count of the maximum color
 	for y := b.Min.Y; y < b.Max.Y; y++ {
 		for x := b.Min.X; x < b.Max.X; x++ {
 			r, g, b, _ := img.At(x, y).RGBA()
@@ -93,15 +89,4 @@ func (t *TopColorsProcessor) ProcessImage(img image.Image) []byte {
 	} 
 
 	return []byte(out)
-}
-
-
-// DecodeImage takes a raw byte array and attempts to parse it into a golang Image type
-func DecodeImage(r io.Reader) image.Image {
-	image, _, err := image.Decode(r)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	return image
 }
