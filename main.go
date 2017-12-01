@@ -12,13 +12,15 @@ var Config struct {
 	OutputFile string
 	MaxLinks int
 	MaxImgProcs int
+	ShowErrors bool
 }
 
 func init() {
 	flag.StringVar(&Config.InputFile, "i", "", "input csv")
 	flag.StringVar(&Config.OutputFile, "o", "", "output csv")
-	flag.IntVar(&Config.MaxImgProcs, "c", 1000, "number of images to be processed concurrently (default 1000)")
+	flag.IntVar(&Config.MaxImgProcs, "maximgprocs", 1000, "number of images to be processed concurrently (default 1000)")
 	flag.IntVar(&Config.MaxLinks, "maxlinks", 400, "Number of links to read from the input stream at a time")
+	flag.BoolVar(&Config.ShowErrors, "e", false, "Whether to include error messages in the output")
 }
 
 func main() {
@@ -31,8 +33,12 @@ func main() {
 	}
 
 	// get the list of links, either from provided CSV or command line args
-	links := initLinks()
+	links := initLinks(Config.InputFile)
 	defer links.Close()
+
+	// init output formatter based on config
+	outputter := initOutputter(Config.OutputFile)
+	defer outputter.Close()
 
 	// continuously read links from the source
 	// we buffer linksChan to limit the amount of memory loaded from the file at once
@@ -45,16 +51,16 @@ func main() {
 	
 	// results of the image processor come back on reschan for display in the main process	
 	for res := range resChan {
-		fmt.Println(res)
+		outputter.OutputSingle(res)
 	}		
 }
 
 // initLinks initializes the links data source from CSV or CLI 
-func initLinks() Links {
+func initLinks(input string) Links {
 	var links Links
 
-	if len(Config.InputFile) > 0 {
-		file, err := os.Open(Config.InputFile + ".csv") // HACK for now because flag ignores everything after the .
+	if len(input) > 0 {
+		file, err := os.Open(input + ".csv") // HACK for now because flag ignores everything after the .
 		if err != nil {
 			log.Fatalf("Problem reading input CSV: %s", err.Error())
 			os.Exit(-1)
@@ -66,6 +72,23 @@ func initLinks() Links {
 	}
 
 	return links
+}
+
+func initOutputter(output string) Outputter {
+	var outputter Outputter
+	if len(output) != 0 {
+		outputter = &CsvOutputter{}
+		
+		err := outputter.Open(output + ".csv") // HACK for some reason flag doesn't pick up anything after the .
+		if err != nil {
+			log.Fatalf("Problem opening CSV file for output: %s", err.Error())
+			return nil
+		}
+	} else {
+		outputter = &CmdLineOutputter{}
+	}
+
+	return outputter
 }
 
 // processLinks streams the image links from the data source to a channel
@@ -96,7 +119,9 @@ func processImages(linksChan <-chan string, resChan chan<- string) {
 
 	// need to coordinate with processImage's child goroutines so we know when to close
 	for p := range procChan {
-		resChan <- p
+		if p != "ERR" {
+			resChan <- p
+		}
 
 		numProcess--
 		if numProcess <= 0 {
@@ -115,11 +140,15 @@ func handleImageProcess(p ImageProcessor, imgLink string, out chan<- string) {
 	
 	img, err := l.Load()
 	if err != nil {
-		out <- err.Error()
+		if Config.ShowErrors {
+			out <- err.Error()
+		} else {
+			out <- "ERR"
+		}
 		return
 	}
 
 	res := p.ProcessImage(img)
 
-	out <- fmt.Sprintf("%s:%s", imgLink, res)	
+	out <- fmt.Sprintf("%s;%s", imgLink, res)	
 }
