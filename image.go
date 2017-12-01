@@ -15,7 +15,7 @@ import (
 
 // abstract processor interface. ProcessImage() returns []byte to give flexibility with the output
 type ImageProcessor interface {
-	ProcessImage(i image.Image) []byte
+	ProcessImage(image.Image) []byte
 }
 
 // TopColorsProcessor calculates the top numColors most prevelant RGB colors in the image (ignores alpha channel)

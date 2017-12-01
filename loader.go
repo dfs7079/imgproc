@@ -1,15 +1,26 @@
 package main
 
 import (
-	"encoding/base64"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 )
 
 type Loader interface {
 	GetReader() io.Reader
+}
+
+const httpRegex string = "^http[s]{0,1}://.*\\.[^/]{2,3}/.*"
+
+// CreateLoader is a factory that instantiates the correct form of Loader based on the link format
+func CreateLoader(link string) Loader {
+	if ok, _ := regexp.MatchString(httpRegex, link); ok {
+		return NewHttpLoader(link)
+	}
+	// everything else just tries to open a file for now
+	return NewFileLoader(link)
 }
 
 // FileLoader handles opening local files
@@ -31,7 +42,7 @@ func (f *FileLoader) GetReader() io.Reader {
 	
 	reader, err := os.Open(f.filename)
 	if err != nil {
-		log.Fatalf("Problem opening file %s: %s", f.filename, err.Error())
+		log.Fatalf("Problem opening file: %s", err.Error())
 		return nil
 	}
 
@@ -41,6 +52,12 @@ func (f *FileLoader) GetReader() io.Reader {
 // HttpLoader retrieves data from a remote URL
 type HttpLoader struct {
 	url string
+}
+
+func NewHttpLoader(url string) *HttpLoader {
+	return &HttpLoader{
+		url,
+	}
 }
 
 func (h *HttpLoader) GetReader() io.Reader {
@@ -55,5 +72,5 @@ func (h *HttpLoader) GetReader() io.Reader {
 		return nil
 	}
 
-	return base64.NewDecoder(base64.StdEncoding, res.Body) 
+	return res.Body 
 }
